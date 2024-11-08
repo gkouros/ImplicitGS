@@ -16,18 +16,16 @@ import json
 import wandb
 
 
-
-
 parser = ArgumentParser(description="Training script parameters")
 parser.add_argument('-s', type=str, default="None")
 parser.add_argument('-m', type=str, default="garden70")
 parser.add_argument("--raw_points", action="store_true")
+parser.add_argument("--grid_search", action="store_true")
 args = parser.parse_args(sys.argv[1:])
 
 ttt = ''
 if args.raw_points:
     ttt = '_raw'
-
 
 wandb.init(
 # set the wandb project where this run will be logged
@@ -75,29 +73,32 @@ def work(q1,q2,q3,raw_point=False):
     wandb.log({"Data": table})
 
 
-
-
 mipnerf_scenes = ['bonsai', 'counter','kitchen', 'room','stump','bicycle','garden','treehill','flowers']
 db_scenes =  ['drjohnson', 'playroom']
 
-# compression parameters for low and high profiles
-qps = [[55,60,20],[90,75,40]]
+if args.grid_search:
+    # compression params for grid search
+    qps = []
+    for q1 in [10, 30, 45, 55, 70, 90, 100]:
+        for q2 in [10, 35, 45, 60, 75, 90, 100]:
+            for q3 in [10, 20, 40, 60, 80, 100]:
+                qps.append([q1, q2, q3])
+else:
+    # compression parameters for low and high profiles
+    qps = [[45,35,10], [45,45,10], [55,45,10],[55,60,20], [70,60,40], [90,75,40], [100,100,100]]
+
 
 # use different compression parameters for mipnerf and deepblending
-for scene in db_scenes:
-    if scene in args.m.split('/')[-1]:
-        qps = [[45,45,10],[70,60,40]]
-        break
-
-for scene in mipnerf_scenes:
-    if scene in args.m.split('/')[-1]:
-        qps = [[70,60,40],[100,100,100]]
-        break
-
+# for scene in db_scenes:
+#     if scene in args.m.split('/')[-1]:
+#         qps = [[45,45,10],[70,60,40]]
+#         break
+# 
+# for scene in mipnerf_scenes:
+#     if scene in args.m.split('/')[-1]:
+#         qps = [[70,60,40],[100,100,100]]
+#         break
 
 for qp in qps:
     work(qp[0],qp[1],qp[2],raw_point=args.raw_points)
-
-
-            
 
