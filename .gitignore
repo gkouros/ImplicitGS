@@ -19,3 +19,4 @@ data
 logs
 slurm
 **.egg-info
+condor
