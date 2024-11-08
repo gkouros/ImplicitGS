@@ -3,10 +3,10 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
 #
-# This software is free for non-commercial, research and evaluation use 
+# This software is free for non-commercial, research and evaluation use
 # under the terms of the LICENSE.md file.
 #
-# For inquiries contact  george.drettakis@inria.fr 
+# For inquiries contact  george.drettakis@inria.fr
 #
 
 #
@@ -51,19 +51,19 @@ class Conctractor(nn.Module):
         self.register_buffer('xyz_min', xyz_min)
         self.register_buffer('xyz_max', xyz_max)
 
-    def decontracte(self, xyz): 
+    def decontracte(self, xyz):
         if not self.enable:
             raise Exception("Not implement")
 
         mask = torch.abs(xyz) > 1.0
         res = xyz.clone()
         signs = (res <0) & (torch.abs(res)>1.0)
-        res[mask] = 1.0/(1.0- (torch.abs(res[mask])-1)) 
+        res[mask] = 1.0/(1.0- (torch.abs(res[mask])-1))
         res[signs] *= -1
         res = res * (self.xyz_max-self.xyz_min) /2 + (self.xyz_max+self.xyz_min) /2
 
         return res
-    
+
     def contracte(self, xyz):
 
         indnorm = (xyz-self.xyz_min)*2.0 / (self.xyz_max-self.xyz_min) -1
@@ -77,7 +77,7 @@ class Conctractor(nn.Module):
 class FeaturePlanes(nn.Module):
     def __init__(self, world_size, xyz_min, xyz_max, feat_dim = 24, mlp_width = [168], out_dim=[53], subplane_multiplier=1):
         super(FeaturePlanes, self).__init__()
-        
+
         self.world_size, self.xyz_min, self.xyz_max = world_size, xyz_min, xyz_max
 
         self.activate_level = 0
@@ -96,7 +96,7 @@ class FeaturePlanes(nn.Module):
 
         self.models = torch.nn.ModuleList()
 
-        mlp_width = [mlp_width[0],mlp_width[0],mlp_width[0]] 
+        mlp_width = [mlp_width[0],mlp_width[0],mlp_width[0]]
         out_dim = [out_dim[0],out_dim[0],out_dim[0]]
 
         for i in range(self.num_levels):
@@ -126,15 +126,10 @@ class FeaturePlanes(nn.Module):
             cnt = cnt + 1
             if cnt>self.activate_level:
                 break
-        
+
         return sum(res)
-        
-        
-        
-        
 
 
-        
 class GaussianLearner(nn.Module):
     def __init__(self, model_params, xyz_min = [-2, -2, -2], xyz_max=[2, 2, 2] ):
         super(GaussianLearner, self).__init__()
@@ -163,7 +158,7 @@ class GaussianLearner(nn.Module):
 
     def inference(self, xyz):
         inputs = xyz.cuda().detach()
-        
+
         tmp  = self._feat(inputs, self.Q0)
         features = tmp[:,:27]
         rotations = tmp[:,27:27+4]
@@ -177,26 +172,21 @@ class GaussianLearner(nn.Module):
         for level in range(self._feat.activate_level+1):
             factor = 1.0
             self._feat.k0s[level].total_variation_add_grad(w*((0.5)**(2-level)))
-            
+
 
     def calc_sparsity(self):
 
         plane = self._feat
         res = 0
         for level in range(self._feat.activate_level+1):
-  
+
             factor = 1.0
-            
+
             for data in [plane.k0s[level].xy_plane, plane.k0s[level].xz_plane, plane.k0s[level].yz_plane]:
                 l1norm = torch.mean(torch.abs(data))
                 res += l1norm * ((0.4)**(2-level)) * factor
 
         return res / ((self._feat.activate_level+1)*3)
-
-        
-
-
-
 
 
 class GaussianModel:
@@ -207,7 +197,7 @@ class GaussianModel:
             actual_covariance = L @ L.transpose(1, 2)
             symm = strip_symmetric(actual_covariance)
             return symm
-        
+
         self.scaling_activation = torch.exp
         self.scaling_inverse_activation = torch.log
 
@@ -227,9 +217,9 @@ class GaussianModel:
 
 
 
-    def __init__(self, sh_degree, model_params =None):
+    def __init__(self, sh_degree, model_params=None):
         self.active_sh_degree = 0
-        self.max_sh_degree = sh_degree  
+        self.max_sh_degree = sh_degree
         self._xyz = torch.empty(0)
 
 
@@ -238,8 +228,6 @@ class GaussianModel:
         self._opacity = torch.empty(0)
 
         self.feat_planes = GaussianLearner(model_params).cuda()
-
-
 
         self.deform = False
 
@@ -253,6 +241,13 @@ class GaussianModel:
 
         self.magic_k = False
         self.enable_net = False
+        self.disable_net_attributes = {
+            'opacity': model_params.disable_net_opacity,
+            'scaling': model_params.disable_net_scaling,
+            'rotation': model_params.disable_net_rotation,
+            'features_dc': model_params.disable_net_features_dc,
+            'features_rest': model_params.disable_net_features_rest,
+        }
 
         self.bbox_scale = model_params.bbox_scale
 
@@ -268,19 +263,19 @@ class GaussianModel:
             self.feat_planes.state_dict(),
             self.contractor.state_dict(),
         )
-    
+
     def restore(self, model_args, training_args):
-        (self.active_sh_degree, 
-        self._xyz, 
-        self._features_dc, 
+        (self.active_sh_degree,
+        self._xyz,
+        self._features_dc,
         self._features_rest,
-        self._scaling, 
-        self._rotation, 
+        self._scaling,
+        self._rotation,
         self._opacity,
-        self.max_radii2D, 
-        xyz_gradient_accum, 
+        self.max_radii2D,
+        xyz_gradient_accum,
         denom,
-        opt_dict, 
+        opt_dict,
         self.spatial_lr_scale) = model_args
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
@@ -291,31 +286,32 @@ class GaussianModel:
         if not self.feat_planes.scale_grid():
             self.training_setup(self.training_args)
 
-        
-
     @property
     def get_scaling(self):
-        x = self._scaling
-        return self.scaling_activation(x)
-    
+        return self.scaling_activation(self._scaling)
+
     @property
     def get_rotation(self):
         return self.rotation_activation(self._rotation)
 
     @property
     def get_scaling_net(self):
-        x = self._scaling_net
-        return self.scaling_activation(x)
-    
+        if self.disable_net_attributes['scaling']:
+            return self.scaling_activation(self._scaling)
+        else:
+            return self.scaling_activation(self._scaling_net)
+
     @property
     def get_rotation_net(self):
-        return self.rotation_activation(self._rotation_net)
-    
-    
+        if self.disable_net_attributes['rotation']:
+            return self.rotation_activation(self._rotation)
+        else:
+            return self.rotation_activation(self._rotation_net)
+
     @property
     def get_xyz(self):
-            return self._xyz 
-    
+            return self._xyz
+
     @property
     def get_features(self):
         features_dc = self._features_dc
@@ -324,21 +320,28 @@ class GaussianModel:
 
     @property
     def get_features_net(self):
-        features_dc = self._features_dc_net
-        features_rest = self._features_rest_net
+        if self.disable_net_attributes["features_dc"]:
+            features_dc = self._features_dc
+        else:
+            features_dc = self._features_dc_net
+        if self.disable_net_attributes["features_rest"]:
+            features_rest = self._features_rest
+        else:
+            features_rest = self._features_rest_net
         return torch.cat((features_dc, features_rest), dim=1)
-    
+
     @property
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
 
-
     @property
     def get_opacity_net(self):
-        return self.opacity_activation(self._opacity_net)
+        if self.disable_net_attributes['opacity']:
+            return self.opacity_activation(self._opacity)
+        else:
+            return self.opacity_activation(self._opacity_net)
 
-    def build_properties(self, data, visible ):
-
+    def build_properties(self, data, visible):
         tmp = torch.ones([self._xyz.size(0)]+list(data.size()[1:]),device = data.device)*-5
         tmp[visible] = data
         return tmp
@@ -355,16 +358,16 @@ class GaussianModel:
 
         self.setup_contractor(center.cpu().tolist(),length.cpu().tolist(), False)
         print('scene_center:',center.cpu().tolist(),'scene_length',length.cpu().tolist())
-    
+
 
     def inference_gaussians(self, visible = None):
         points = self.get_xyz
 
         if visible is None:
             visible = torch.ones(points.size(0),device = points.device).bool()
-        
+
         opacity, scales, features,rotations = self.feat_planes.inference(self.contractor.contracte(points.detach()[visible]))
-    
+
         scales = (scales-1)*5-2
         features = features.view(features.size(0),(self.max_sh_degree + 1) ** 2,3)
         feature_dc = features[:,0:1,:]
@@ -380,7 +383,7 @@ class GaussianModel:
 
         return points
 
-    
+
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
 
@@ -467,11 +470,11 @@ class GaussianModel:
                 lr = self.xyz_scheduler_args(iteration)
                 param_group['lr'] = lr
 
-                
+
 
     def construct_list_of_attributes(self):
         l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
-        
+
         for i in range(self._features_dc.shape[1]*self._features_dc.shape[2]):
             l.append('f_dc_{}'.format(i))
         for i in range(self._features_rest.shape[1]*self._features_rest.shape[2]):
@@ -516,7 +519,7 @@ class GaussianModel:
                         np.asarray(plydata.elements[0]["z"])),  axis=1)
         opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
 
-        
+
 
         features_dc = np.zeros((xyz.shape[0], 3, 1))
         features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
@@ -687,7 +690,7 @@ class GaussianModel:
         selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
         selected_pts_mask = torch.logical_and(selected_pts_mask,
                                               torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
-        
+
         new_xyz = self._xyz[selected_pts_mask]
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]
@@ -699,7 +702,7 @@ class GaussianModel:
 
     def clone_and_grow(self):
 
-        
+
         new_xyz = self._xyz + torch.randn(self._xyz.size(), device = self._xyz.device)*0.1
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]
@@ -741,10 +744,10 @@ class GaussianModel:
         idxs = torch.from_numpy(idxs).long().cuda()
         mask[idxs] = 0
         self.prune_points(mask)
-        
+
         torch.cuda.empty_cache()
         print("Graph Downsampling Processed, points number after sampling: ", self.get_xyz.shape[0], "Time: ", time.time() - t1, "seconds")
-  
+
 
 
     def prune_points_m(self, min_opacity):

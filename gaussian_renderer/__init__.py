@@ -3,7 +3,7 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
 #
-# This software is free for non-commercial, research and evaluation use 
+# This software is free for non-commercial, research and evaluation use
 # under the terms of the LICENSE.md file.
 #
 # For inquiries contact  george.drettakis@inria.fr
@@ -107,11 +107,11 @@ def render_net(pc, pipe, rasterizer, means3D, means2D, override_color):
 
 def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None):
     """
-    Render the scene. 
-    
+    Render the scene.
+
     Background tensor (bg_color) must be on GPU!
     """
- 
+
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
     screenspace_points = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
     try:
@@ -148,21 +148,24 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         points = pc.get_xyz
     means3D = points
     means2D = screenspace_points
-    
 
-    # Rasterize visible Gaussians to image, obtain their radii (on screen). 
+
+    # Rasterize visible Gaussians to image, obtain their radii (on screen).
     rendered_image = None
     radii = None
 
 
     if not pc.magic_k:
+        # always use explicit path first
         rendered_image, radii = render_ori(pc, pipe, rasterizer, means3D, means2D, override_color)
-        if random.random()<0.2 and  pc.enable_net:
+        # use implicit path with 20% probability
+        if random.random() < 0.2 and pc.enable_net:
             rendered_image_net, radii_net = render_net(pc, pipe, rasterizer, means3D, means2D, override_color)
         else:
             rendered_image_net = rendered_image
-            radii_net = radii 
+            radii_net = radii
     else:
+        # use implicit path always
         rendered_image_net, radii_net = render_net(pc, pipe, rasterizer, means3D, means2D, override_color)
         rendered_image = rendered_image_net
         radii =  radii_net

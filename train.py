@@ -3,7 +3,7 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
 #
-# This software is free for non-commercial, research and evaluation use 
+# This software is free for non-commercial, research and evaluation use
 # under the terms of the LICENSE.md file.
 #
 # For inquiries contact  george.drettakis@inria.fr
@@ -48,26 +48,19 @@ def calc_scene_bbox(scene):
     return center, length
 
 
-
-
-
-
-
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, args):
     first_iter = 0
-    
+
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, model_params=dataset)
     scene = Scene(dataset, gaussians)
-
-
 
     if  dataset.contractor:
         center, length = calc_scene_bbox(scene)
         dataset.scene_center = center.detach().cpu().numpy().tolist()
         dataset.scene_length = length.detach().cpu().numpy().tolist()
         gaussians.setup_contractor(center=dataset.scene_center,length=dataset.scene_length, contractor = dataset.contractor)
-        
+
     else:
         center = dataset.scene_center
         length = dataset.scene_length
@@ -79,7 +72,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     print(opt.graph_downsampling_iters)
     print('--------------------------')
     tb_writer = prepare_output_and_logger(dataset)
-   
+
     gaussians.training_setup(opt)
 
 
@@ -96,7 +89,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter += 1
 
     #bootstraping
-    for iteration in range(first_iter, opt.iterations+1):    
+    for iteration in range(first_iter, opt.iterations+1):
 
         if args.use_gui:
             if network_gui.conn == None:
@@ -139,21 +132,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
 
-
-
-
         Ll1 = l1_loss(image, gt_image)
-        loss_r = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) 
+        loss_r = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
 
 
-        loss_r_net = (1.0 - opt.lambda_dssim) * l1_loss(image_net, gt_image) + opt.lambda_dssim * (1.0 - ssim(image_net, gt_image)) 
+        loss_r_net = (1.0 - opt.lambda_dssim) * l1_loss(image_net, gt_image) + opt.lambda_dssim * (1.0 - ssim(image_net, gt_image))
 
 
         if  iteration%10 ==0 and opt.datarate_lambda>0 and gaussians.enable_net and not args.no_regularization:
-            sparsity_loss = gaussians.feat_planes.calc_sparsity() 
+            sparsity_loss = gaussians.feat_planes.calc_sparsity()
         else:
             sparsity_loss =  torch.tensor(0,device='cuda')
-    
+
 
         loss =  (loss_r + loss_r_net)*0.5  + 1e-3*sparsity_loss
 
@@ -180,10 +170,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
 
-
-
-            
-
             # Densification
             if iteration < opt.densify_until_iter:
                 # Keep track of max radii in image-space for pruning
@@ -193,7 +179,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     gaussians.densify_and_prune(opt.densify_grad_threshold, 0.015, scene.cameras_extent, size_threshold)
-                
+
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     if not gaussians.magic_k:
                         gaussians.reset_opacity()
@@ -202,7 +188,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.magic_k = True
 
             if iteration in opt.graph_downsampling_iters:
-                gaussians.graph_downsampling(opt.pc_downsamplerate) 
+                gaussians.graph_downsampling(opt.pc_downsamplerate)
                 opt.densify_grad_threshold = opt.densify_grad_threshold*1.2
 
             if iteration==2001:
@@ -223,25 +209,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 print('number of points:', gaussians._xyz.size(0),gaussians.capture()[1].size(0) )
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save(gaussians.capture(), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
-            
-
- 
-
-            
 
 
-
-
-
-
-def prepare_output_and_logger(args):    
+def prepare_output_and_logger(args):
     if not args.model_path:
         if os.getenv('OAR_JOB_ID'):
             unique_str=os.getenv('OAR_JOB_ID')
         else:
             unique_str = str(uuid.uuid4())
         args.model_path = os.path.join("./output/", unique_str[0:10])
-        
+
     # Set up output folder
     print("Output folder: {}".format(args.model_path))
     os.makedirs(args.model_path, exist_ok = True)
@@ -265,7 +242,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
     # Report test and samples of training set
     if iteration in testing_iterations:
         torch.cuda.empty_cache()
-        validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()}, 
+        validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()},
                               {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
 
         for config in validation_configs:
@@ -282,7 +259,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     l1_test += l1_loss(image, gt_image).mean().double()
                     psnr_test += psnr(image, gt_image).mean().double()
                 psnr_test /= len(config['cameras'])
-                l1_test /= len(config['cameras'])          
+                l1_test /= len(config['cameras'])
                 print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config['name'], l1_test, psnr_test))
                 if tb_writer:
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - l1_loss', l1_test, iteration)
@@ -327,7 +304,7 @@ if __name__ == "__main__":
         config=vars(args),
         name = args.model_path.split('/')[-1]
     )
-    
+
     print("Optimizing " + args.model_path)
 
     # Initialize system state (RNG)
