@@ -1,6 +1,7 @@
 name: implicit_gs
 channels:
   - pytorch
+  - nvidia
   - conda-forge
   - defaults
 dependencies:
@@ -8,13 +9,19 @@ dependencies:
   - plyfile
   - python=3.9.18
   - pip
-  - pytorch=2.0.1+cu118
+  - pytorch=2.0.1
+  - pytorch-cuda=11.8
+  - torchvision=0.15.2
+  - torchaudio=2.0.2
   - tqdm
-  - zCurve
-  - pdb
-  - pillow_heif
   - wandb
   - ipdb
+  - matplotlib
+  - mediapy
   - pip:
+    - zcurve
+    - pillow_heif
+    - point_cloud_utils
+    - opencv-python-headless
     - submodules/diff-gaussian-rasterization_igs
     - submodules/simple-knn
