@@ -2,8 +2,8 @@
 set -e
 
 # no multilevel
-#python train.py --eval --no_multilevel -s data/mip360/bicycle  -m logs/ablation/bicycle_m  --num_channels 15 --plane_size 2500 --port 6557 --contractor  
-#python train.py --eval --no_multilevel -s data/mip360/treehill -m logs/ablation/treehill_m --num_channels 15 --plane_size 2500 --port 6557 --contractor --bbox_scale 0.3
+python train.py --eval --no_multilevel -s data/mip360/bicycle  -m logs/ablation/bicycle_m  --num_channels 15 --plane_size 2500 --port 6557 --contractor  
+python train.py --eval --no_multilevel -s data/mip360/treehill -m logs/ablation/treehill_m --num_channels 15 --plane_size 2500 --port 6557 --contractor --bbox_scale 0.3
 python distortion_curve.py -m logs/ablation/bicycle_m
 python distortion_curve.py -m logs/ablation/treehill_m
 
