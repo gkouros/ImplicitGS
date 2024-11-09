@@ -241,17 +241,26 @@ class GaussianModel:
 
         self.magic_k = False
         self.enable_net = False
-        self.disable_net_attributes = {
-            'opacity': model_params.disable_net_opacity,
-            'scaling': model_params.disable_net_scaling,
-            'rotation': model_params.disable_net_rotation,
-            'features_dc': model_params.disable_net_features_dc,
-            'features_rest': model_params.disable_net_features_rest,
-        }
+        try:
+            self.disable_net_attributes = {
+                'opacity': model_params.disable_net_opacity,
+                'scaling': model_params.disable_net_scaling,
+                'rotation': model_params.disable_net_rotation,
+                'features_dc': model_params.disable_net_features_dc,
+                'features_rest': model_params.disable_net_features_rest,
+            }
+        except AttributeError:
+            self.disable_net_attributes = {
+                'opacity': False,
+                'scaling': False,
+                'rotation': False,
+                'features_dc': False,
+                'features_rest': False,
+            }
 
         self.bbox_scale = model_params.bbox_scale
 
-        self.setup_contractor(model_params.scene_center, model_params.scene_length, model_params.contractor )
+        self.setup_contractor(model_params.scene_center, model_params.scene_length, model_params.contractor)
 
 
     def capture(self):
