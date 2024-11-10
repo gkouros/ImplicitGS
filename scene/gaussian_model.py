@@ -162,9 +162,8 @@ class GaussianLearner(nn.Module):
         tmp  = self._feat(inputs, self.Q0)
         features = tmp[:,:27]
         rotations = tmp[:,27:27+4]
-        scale = tmp[:,31:31+3]
+        scale = torch.sigmoid(tmp[:,31:31+3])
         opacity = tmp[:,34:]
-        scale = torch.sigmoid(scale)
 
         return opacity*10, scale, features, rotations
 
@@ -214,14 +213,10 @@ class GaussianModel:
         self.contractor = Conctractor(xyz_min=center-length*self.bbox_scale/2, xyz_max=center+length*self.bbox_scale/2, enable = contractor)
         self.contractor = self.contractor.cuda()
 
-
-
-
     def __init__(self, sh_degree, model_params=None):
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
         self._xyz = torch.empty(0)
-
 
         self._features_dc = torch.empty(0)
         self._scaling = torch.empty(0)
@@ -264,28 +259,44 @@ class GaussianModel:
 
 
     def capture(self):
-        return (
+        ret = (
             self.active_sh_degree,
             self._xyz,
-            self._rotation,
-            self._scaling,
             self.feat_planes.state_dict(),
             self.contractor.state_dict(),
         )
 
+        if self.disable_net_attributes.values().any():
+            explicit_attributes = {
+                "scaling": self._scaling,
+                "rotation": self._rotation,
+                "opacity": self._opacity,
+                "features_dc": self._features_dc,
+                "features_rest": self._features_rest,
+                # "max_radii2D": self.max_radii2D,
+                # "xyz_gradient_accum": self.xyz_gradient_accum,
+                # "denom": self.denom,
+                # "spatial_lr_scale": self.spatial_lr_scale,
+            }
+            ret += (explicit_attributes,)
+
+        return ret
+
     def restore(self, model_args, training_args):
-        (self.active_sh_degree,
-        self._xyz,
-        self._features_dc,
-        self._features_rest,
-        self._scaling,
-        self._rotation,
-        self._opacity,
-        self.max_radii2D,
-        xyz_gradient_accum,
-        denom,
-        opt_dict,
-        self.spatial_lr_scale) = model_args
+        (
+            self.active_sh_degree,
+            self._xyz,
+            self._features_dc,
+            self._features_rest,
+            self._scaling,
+            self._rotation,
+            self._opacity,
+            self.max_radii2D,
+            xyz_gradient_accum,
+            denom,
+            opt_dict,
+            self.spatial_lr_scale
+        ) = model_args
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
@@ -375,7 +386,7 @@ class GaussianModel:
         if visible is None:
             visible = torch.ones(points.size(0),device = points.device).bool()
 
-        opacity, scales, features,rotations = self.feat_planes.inference(self.contractor.contracte(points.detach()[visible]))
+        opacity, scales, features, rotations = self.feat_planes.inference(self.contractor.contracte(points.detach()[visible]))
 
         scales = (scales-1)*5-2
         features = features.view(features.size(0),(self.max_sh_degree + 1) ** 2,3)

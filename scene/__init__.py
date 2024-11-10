@@ -3,7 +3,7 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
 #
-# This software is free for non-commercial, research and evaluation use 
+# This software is free for non-commercial, research and evaluation use
 # under the terms of the LICENSE.md file.
 #
 # For inquiries contact  george.drettakis@inria.fr
@@ -80,12 +80,19 @@ class Scene:
                 ckpt = torch.load(os.path.join(self.model_path,f'chkpnt{self.loaded_iter}.pth'))
             else:
                 ckpt = torch.load(os.path.join(self.model_path,f'chkpnt{self.loaded_iter}.pth_rec.pth'))
-            self.gaussians.feat_planes.load_state_dict(ckpt[4],strict=False)
+            self.gaussians.feat_planes.load_state_dict(ckpt[2],strict=False)
             if len(ckpt)>5:
-                self.gaussians.contractor.load_state_dict(ckpt[5],strict=False)
+                self.gaussians.contractor.load_state_dict(ckpt[3],strict=False)
             self.gaussians.feat_planes = self.gaussians.feat_planes.cuda()
             self.gaussians._xyz.data = ckpt[1]
             self.gaussians.active_sh_degree = self.gaussians.max_sh_degree
+            if len(ckpt) == 5:
+                explicit_attibutes = ckpt[4]
+                self.gaussians._opacity = explicit_attibutes['opacity']
+                self.gaussians._scaling = explicit_attibutes['scaling']
+                self.gaussians._rotation = explicit_attibutes['rotation']
+                self.gaussians._features_dc = explicit_attibutes['features_dc']
+                self.gaussians._features_rest = explicit_attibutes['features_rest']
         else:
             self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
 
