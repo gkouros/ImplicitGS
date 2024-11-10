@@ -266,7 +266,7 @@ class GaussianModel:
             self.contractor.state_dict(),
         )
 
-        if self.disable_net_attributes.values().any():
+        if any(self.disable_net_attributes.values()):
             explicit_attributes = {
                 "scaling": self._scaling,
                 "rotation": self._rotation,
