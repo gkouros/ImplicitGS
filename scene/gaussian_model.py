@@ -488,9 +488,13 @@ class GaussianModel:
             if param_group["name"] == "xyz":
                 lr = self.xyz_scheduler_args(iteration)
                 param_group['lr'] = lr
-            if self.use_planes_lr_schedulers and param_group["name"].startswith("feat_planes"):
-                lr = self.planes_scheduler_args(iteration)
-                param_group['lr'] = lr
+            if self.use_planes_lr_schedulers:
+                if param_group["name"].startswith("feat_planes"):
+                    lr = self.planes_scheduler_args(iteration)
+                    param_group['lr'] = lr
+                elif param_group["name"].startswith("fp_mlp_f"):
+                    lr = self.planesmlp_scheduler_args(iteration)
+                    param_group['lr'] = lr
 
     def construct_list_of_attributes(self):
         l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
