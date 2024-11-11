@@ -81,12 +81,12 @@ class Scene:
             else:
                 ckpt = torch.load(os.path.join(self.model_path,f'chkpnt{self.loaded_iter}.pth_rec.pth'))
             self.gaussians.feat_planes.load_state_dict(ckpt[2],strict=False)
-            if len(ckpt)>5:
+            if len(ckpt) > 3:
                 self.gaussians.contractor.load_state_dict(ckpt[3],strict=False)
             self.gaussians.feat_planes = self.gaussians.feat_planes.cuda()
             self.gaussians._xyz.data = ckpt[1]
             self.gaussians.active_sh_degree = self.gaussians.max_sh_degree
-            if len(ckpt) == 5:
+            if len(ckpt) > 4:
                 explicit_attibutes = ckpt[4]
                 self.gaussians._opacity = explicit_attibutes['opacity']
                 self.gaussians._scaling = explicit_attibutes['scaling']
