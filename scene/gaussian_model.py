@@ -120,11 +120,11 @@ class FeaturePlanes(nn.Module):
 
         res = []
         cnt =0
-        for m,feat in zip(self.models,level_features):
+        for m,feat in zip(self.models, level_features):
             rr = m(feat)
             res.append(rr)
             cnt = cnt + 1
-            if cnt>self.activate_level:
+            if cnt > self.activate_level:
                 break
 
         return sum(res)
@@ -160,9 +160,9 @@ class GaussianLearner(nn.Module):
         inputs = xyz.cuda().detach()
 
         tmp  = self._feat(inputs, self.Q0)
-        features = tmp[:,:27]
-        rotations = tmp[:,27:27+4]
-        scale = torch.sigmoid(tmp[:,31:31+3])
+        features = tmp[:, :27]
+        rotations = tmp[:, 27:27+4]
+        scale = torch.sigmoid(tmp[:, 31:31+3])
         opacity = tmp[:,34:]
 
         return opacity*10, scale, features, rotations
@@ -393,7 +393,6 @@ class GaussianModel:
         feature_dc = features[:,0:1,:]
         feature_rest = features[:,1:,:]
 
-
         self._opacity_net = self.build_properties(opacity,visible)
         self._scaling_net = self.build_properties(scales,visible)
         self._rotation_net = self.build_properties(rotations,visible)
@@ -462,11 +461,11 @@ class GaussianModel:
 
         for i in range(3):
             if i == self.feat_planes._feat.activate_level:
-                l.append( {'params': self.feat_planes._feat.k0s[i].parameters(), 'lr': 0.01, 'name': 'feat_planes%d'%i})
-                l.append( {'params': self.feat_planes._feat.models[i].parameters(), 'lr': 1e-4, 'name': 'fp_mlp_f%d'%i})
+                l.append( {'params': self.feat_planes._feat.k0s[i].parameters(), 'lr': training_args.feat_plane_active_k0_lr, 'name': 'feat_planes%d'%i})
+                l.append( {'params': self.feat_planes._feat.models[i].parameters(), 'lr': training_args.feat_plane_active_mlp_lr, 'name': 'fp_mlp_f%d'%i})
             else:
-                l.append( {'params': self.feat_planes._feat.k0s[i].parameters(), 'lr': 0.001, 'name': 'feat_planes%d'%i})
-                l.append( {'params': self.feat_planes._feat.models[i].parameters(), 'lr': 1e-5, 'name': 'fp_mlp_f%d'%i})
+                l.append( {'params': self.feat_planes._feat.k0s[i].parameters(), 'lr': training_args.feat_plane_k0_lr, 'name': 'feat_planes%d'%i})
+                l.append( {'params': self.feat_planes._feat.models[i].parameters(), 'lr': training_args.feat_plane_mlp_lr, 'name': 'fp_mlp_f%d'%i})
 
 
         self.optimizer = torch.optim.Adam(l, eps=1e-15)
