@@ -96,6 +96,7 @@ class OptimizationParams(ParamGroup):
         self.feat_plane_active_mlp_lr = 1e-4
         self.feat_plane_k0_lr = 0.001
         self.feat_plane_mlp_lr = 1e-5
+        self.use_planes_lr_schedulers = False
         self.percent_dense = 0.01
         self.lambda_dssim = 0.2
         self.densification_interval = 100

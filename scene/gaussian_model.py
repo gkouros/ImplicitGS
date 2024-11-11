@@ -448,7 +448,7 @@ class GaussianModel:
         self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-
+        self.use_planes_lr_schedulers = training_args.use_planes_lr_schedulers
 
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
@@ -473,12 +473,12 @@ class GaussianModel:
                                                     lr_final=training_args.position_lr_final*self.spatial_lr_scale,
                                                     lr_delay_mult=training_args.position_lr_delay_mult,
                                                     max_steps=training_args.position_lr_max_steps)
-        self.planes_scheduler_args = get_expon_lr_func(lr_init=0.01,
-                                                    lr_final=0.005,
+        self.planes_scheduler_args = get_expon_lr_func(lr_init=training_args.feat_plane_active_k0_lr,
+                                                    lr_final=training_args.feat_plane_active_k0_lr / 2,
                                                     lr_delay_mult=training_args.position_lr_delay_mult,
                                                     max_steps=training_args.position_lr_max_steps)
-        self.planesmlp_scheduler_args = get_expon_lr_func(lr_init=1e-4,
-                                                    lr_final=5e-5,
+        self.planesmlp_scheduler_args = get_expon_lr_func(lr_init=training_args.feat_plane_active_mlp_lr,
+                                                    lr_final=training_args.feat_plane_active_mlp_lr/2,
                                                     lr_delay_mult=training_args.position_lr_delay_mult,
                                                     max_steps=training_args.position_lr_max_steps)
 
@@ -488,8 +488,9 @@ class GaussianModel:
             if param_group["name"] == "xyz":
                 lr = self.xyz_scheduler_args(iteration)
                 param_group['lr'] = lr
-
-
+            if self.use_planes_lr_schedulers and param_group["name"].startswith("feat_planes"):
+                lr = self.planes_scheduler_args(iteration)
+                param_group['lr'] = lr
 
     def construct_list_of_attributes(self):
         l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
