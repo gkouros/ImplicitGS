@@ -308,7 +308,7 @@ if __name__ == "__main__":
     print("Optimizing " + args.model_path)
 
     # Initialize system state (RNG)
-    safe_state(args.quiet)
+    # safe_state(args.quiet)
 
     # Start GUI server, configure and run training
     if args.use_gui:

@@ -93,8 +93,8 @@ class FeaturePlanes(nn.Module):
             self.k0s.append(PlaneGrid(feat_dim, cur_ws, xyz_min, xyz_max,config={'factor':1}))
             print('Create Planes @ ', cur_ws)
 
-
         self.models = torch.nn.ModuleList()
+        self.output_layers = torch.nn.ModuleList()
 
         mlp_width = [mlp_width[0],mlp_width[0],mlp_width[0]]
         out_dim = [out_dim[0],out_dim[0],out_dim[0]]
@@ -105,8 +105,18 @@ class FeaturePlanes(nn.Module):
                                 nn.ReLU(),
                                 nn.Linear(mlp_width[i], mlp_width[i]),
                                 nn.ReLU(),
-                                nn.Linear(mlp_width[i], out_dim[i])
                                 ))
+                                # nn.Linear(mlp_width[i], out_dim[i])))
+
+            self.output_layers.append(
+                torch.nn.ModuleList([
+                    nn.Linear(mlp_width[i], 1),  # opacity
+                    nn.Linear(mlp_width[i], 3),  # scale
+                    nn.Linear(mlp_width[i], 4),  # rotation
+                    nn.Linear(mlp_width[i], 3),  # features_dc
+                    nn.Linear(mlp_width[i], out_dim[i] - 11),  # features_rest
+                ])
+            )
 
 
     def forward(self, x, Q=0):
@@ -120,8 +130,9 @@ class FeaturePlanes(nn.Module):
 
         res = []
         cnt =0
-        for m,feat in zip(self.models, level_features):
-            rr = m(feat)
+        for m, out, feat in zip(self.models, self.output_layers, level_features):
+            rr = m(feat)  # [N,mlp_width]
+            rr = torch.cat([o(rr) for o in out], dim=1)
             res.append(rr)
             cnt = cnt + 1
             if cnt > self.activate_level:
@@ -141,9 +152,12 @@ class GaussianLearner(nn.Module):
         self.world_size = [model_params.plane_size]*3
         self.max_step = 6
         self.current_step = 0
+        # output dims: opacity + scale + rotation + sh_coeffs
+        out_dim = 1 + 3 + 4 + ((model_params.sh_degree + 1) ** 2) * 3
 
         self._feat = FeaturePlanes(world_size=self.world_size, xyz_min = self.xyz_min, xyz_max= self.xyz_max,
-                                    feat_dim = model_params.num_channels, mlp_width = [model_params.mlp_dim], out_dim=[35], subplane_multiplier=model_params.subplane_multiplier )  # 27,4,3,1
+                                    feat_dim = model_params.num_channels, mlp_width = [model_params.mlp_dim],
+                                    out_dim=[out_dim], subplane_multiplier=model_params.subplane_multiplier)
 
         self.register_buffer('opacity_scale', torch.tensor(10))
         self.opacity_scale = self.opacity_scale.cuda()
@@ -159,13 +173,14 @@ class GaussianLearner(nn.Module):
     def inference(self, xyz):
         inputs = xyz.cuda().detach()
 
-        tmp  = self._feat(inputs, self.Q0)
-        features = tmp[:, :27]
-        rotations = tmp[:, 27:27+4]
-        scale = torch.sigmoid(tmp[:, 31:31+3])
-        opacity = tmp[:,34:]
+        tmp  = self._feat(inputs, self.Q0)  # [N,8+3*(sh_degree+1)**2]
+        opacity = tmp[:,0:1]  # [N,1]
+        scale = torch.sigmoid(tmp[:, 1:4])  # [N,3]
+        rotations = tmp[:, 4:8]  # [N,4]
+        features = tmp[:, 8:]  # [N,3*(sh_degree+1)**2]
 
         return opacity*10, scale, features, rotations
+
 
     def tv_loss(self, w):
         for level in range(self._feat.activate_level+1):
@@ -390,15 +405,14 @@ class GaussianModel:
 
         scales = (scales-1)*5-2
         features = features.view(features.size(0),(self.max_sh_degree + 1) ** 2,3)
-        feature_dc = features[:,0:1,:]
-        feature_rest = features[:,1:,:]
+        feature_dc = features[:,0:1,:]  # [N,1,3]
+        feature_rest = features[:,1:,:]  # [N,8,3] for max_sh_degree=2
 
         self._opacity_net = self.build_properties(opacity,visible)
         self._scaling_net = self.build_properties(scales,visible)
         self._rotation_net = self.build_properties(rotations,visible)
         self._features_dc_net = self.build_properties(feature_dc,visible)
         self._features_rest_net = self.build_properties(feature_rest,visible)
-
 
         return points
 
@@ -463,10 +477,23 @@ class GaussianModel:
             if i == self.feat_planes._feat.activate_level:
                 l.append( {'params': self.feat_planes._feat.k0s[i].parameters(), 'lr': training_args.feat_plane_active_k0_lr, 'name': 'feat_planes%d'%i})
                 l.append( {'params': self.feat_planes._feat.models[i].parameters(), 'lr': training_args.feat_plane_active_mlp_lr, 'name': 'fp_mlp_f%d'%i})
+                if training_args.use_attribute_level_lr:
+                    l.append( {'params': self.feat_planes._feat.output_layers[i][0].parameters(), 'lr': training_args.feat_plane_active_mlp_lr, 'name': 'fp_mlp_f%d'%i}) # opacity
+                    l.append( {'params': self.feat_planes._feat.output_layers[i][1].parameters(), 'lr': training_args.feat_plane_active_mlp_lr/10, 'name': 'fp_mlp_f%d'%i}) # scaling
+                    l.append( {'params': self.feat_planes._feat.output_layers[i][2].parameters(), 'lr': training_args.feat_plane_active_mlp_lr/50, 'name': 'fp_mlp_f%d'%i}) # rotation
+                    l.append( {'params': self.feat_planes._feat.output_layers[i][3].parameters(), 'lr': training_args.feat_plane_active_mlp_lr/20, 'name': 'fp_mlp_f%d'%i}) # features_dc
+                    l.append( {'params': self.feat_planes._feat.output_layers[i][4].parameters(), 'lr': training_args.feat_plane_active_mlp_lr/400, 'name': 'fp_mlp_f%d'%i}) # features_rest
             else:
                 l.append( {'params': self.feat_planes._feat.k0s[i].parameters(), 'lr': training_args.feat_plane_k0_lr, 'name': 'feat_planes%d'%i})
                 l.append( {'params': self.feat_planes._feat.models[i].parameters(), 'lr': training_args.feat_plane_mlp_lr, 'name': 'fp_mlp_f%d'%i})
+                if training_args.use_attribute_level_lr:
+                    l.append( {'params': self.feat_planes._feat.output_layers[i][0].parameters(), 'lr': training_args.feat_plane_mlp_lr, 'name': 'fp_mlp_f%d'%i}) # opacity
+                    l.append( {'params': self.feat_planes._feat.output_layers[i][1].parameters(), 'lr': training_args.feat_plane_mlp_lr/10, 'name': 'fp_mlp_f%d'%i}) # scaling
+                    l.append( {'params': self.feat_planes._feat.output_layers[i][2].parameters(), 'lr': training_args.feat_plane_mlp_lr/50, 'name': 'fp_mlp_f%d'%i}) # rotation
+                    l.append( {'params': self.feat_planes._feat.output_layers[i][3].parameters(), 'lr': training_args.feat_plane_mlp_lr/20, 'name': 'fp_mlp_f%d'%i}) # features_dc
+                    l.append( {'params': self.feat_planes._feat.output_layers[i][4].parameters(), 'lr': training_args.feat_plane_mlp_lr/400, 'name': 'fp_mlp_f%d'%i}) # features_rest
 
+        # import pdb; pdb.set_trace()
 
         self.optimizer = torch.optim.Adam(l, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
