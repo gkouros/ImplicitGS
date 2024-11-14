@@ -28,6 +28,7 @@ from torch.utils.data import TensorDataset, DataLoader
 import torch.nn.functional as F
 import numpy as np
 import wandb
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -161,7 +162,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ema_loss_for_log = 0.4 * loss_r.item() + 0.6 * ema_loss_for_log
             ema_loss_for_log_net =  0.4 * loss_r_net.item() + 0.6 * ema_loss_for_log_net
             if iteration % 10 == 0:
-                wandb.log({"loss": ema_loss_for_log, "#points": gaussians._xyz.size(0), "Loss_r_net": ema_loss_for_log_net})
+                if args.use_wandb:
+                    wandb.log({"loss": ema_loss_for_log, "#points": gaussians._xyz.size(0), "Loss_r_net": ema_loss_for_log_net})
                 progress_bar.set_postfix({"Loss_r": f"{ema_loss_for_log:.{7}f}", "Loss_r_net": f"{ema_loss_for_log_net:.{7}f}", "#points": f"{gaussians._xyz.size(0)}"})
                 progress_bar.update(10)
             if iteration == opt.iterations:
@@ -289,6 +291,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_gui", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[10000,20000,30000, 40000,50000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
+    parser.add_argument("--use_wandb", action="store_true")
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
@@ -296,14 +299,14 @@ if __name__ == "__main__":
         args.graph_downsampling_iters = []
         print('$$$$ no downsample $$$$')
 
-
-    wandb.init(
-    # set the wandb project where this run will be logged
-        project="3dgs_compress",
-    # track hyperparameters and run metadata
-        config=vars(args),
-        name = args.model_path.split('/')[-1]
-    )
+    if args.use_wandb:
+        wandb.init(
+        # set the wandb project where this run will be logged
+            project="3dgs_compress",
+        # track hyperparameters and run metadata
+            config=vars(args),
+            name = args.model_path.split('/')[-1]
+        )
 
     print("Optimizing " + args.model_path)
 
