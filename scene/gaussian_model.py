@@ -144,8 +144,9 @@ class FeaturePlanes(nn.Module):
                     ])
                 )
             elif self.mlp_mode == "mixed":
+                mixed_feat_dim = feat_dim * self.num_attributes if self.plane_mode == "separate" else feat_dim
                 self.models.append(nn.Sequential(
-                                    nn.Linear(feat_dim, mlp_width[i]),
+                                    nn.Linear(mixed_feat_dim, mlp_width[i]),
                                     nn.ReLU(),
                                     nn.Linear(mlp_width[i], mlp_width[i]),
                                     nn.ReLU(),
