@@ -20,6 +20,7 @@
 
 
 
+import random
 import torch
 import numpy as np
 from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
@@ -75,14 +76,18 @@ class Conctractor(nn.Module):
         return indnorm
 
 class FeaturePlanes(nn.Module):
-    def __init__(self, world_size, xyz_min, xyz_max, feat_dim = 24, mlp_width = [168], out_dim=[53], subplane_multiplier=1):
+    def __init__(self, world_size, xyz_min, xyz_max, feat_dim = 24, mlp_width = [168], out_dim=[53], subplane_multiplier=1,
+                 mlp_mode="shared", plane_mode="shared"):
         super(FeaturePlanes, self).__init__()
 
         self.world_size, self.xyz_min, self.xyz_max = world_size, xyz_min, xyz_max
 
         self.activate_level = 0
         self.num_levels = 3
+        self.num_attributes = 5
         self.level_factor = 0.5
+        self.plane_mode = plane_mode
+        self.mlp_mode = mlp_mode
 
         t_ws = torch.tensor(world_size)
 
@@ -90,7 +95,17 @@ class FeaturePlanes(nn.Module):
 
         for i in range(self.num_levels):
             cur_ws = (t_ws*self.level_factor**(self.num_levels-i-1)).cpu().int().numpy().tolist()
-            self.k0s.append(PlaneGrid(feat_dim, cur_ws, xyz_min, xyz_max,config={'factor':1}))
+            if plane_mode in ["shared", "mixed"]:
+                self.k0s.append(PlaneGrid(feat_dim, cur_ws, xyz_min, xyz_max, config={'factor':1}))
+            elif plane_mode == "separate":
+                self.k0s.append(
+                    torch.nn.ModuleList([
+                        PlaneGrid(feat_dim, cur_ws, xyz_min, xyz_max, config={'factor':1})
+                        for _ in range(self.num_attributes)])
+                )
+            else:
+                raise ValueError(f"Unknown plane_mode {plane_mode}")
+
             print('Create Planes @ ', cur_ws)
 
         self.models = torch.nn.ModuleList()
@@ -100,24 +115,52 @@ class FeaturePlanes(nn.Module):
         out_dim = [out_dim[0],out_dim[0],out_dim[0]]
 
         for i in range(self.num_levels):
-            self.models.append(nn.Sequential(
-                                nn.Linear(self.k0s[i].get_dim(), mlp_width[i]),
+            if self.plane_mode == "shared":
+                feat_dim = self.k0s[i].get_dim()
+            elif self.plane_mode == "mixed":
+                feat_dim = self.k0s[i].get_dim() // self.num_attributes
+            elif self.plane_mode == "separate":
+                feat_dim = self.k0s[i][0].get_dim()
+            else:
+                raise ValueError(f"Unknown plane_mode {plane_mode}")
+
+            if self.mlp_mode == "shared":
+                self.models.append(nn.Sequential(
+                                nn.Linear(feat_dim, mlp_width[i]),
                                 nn.ReLU(),
                                 nn.Linear(mlp_width[i], mlp_width[i]),
                                 nn.ReLU(),
-                                ))
-                                # nn.Linear(mlp_width[i], out_dim[i])))
-
-            self.output_layers.append(
-                torch.nn.ModuleList([
-                    nn.Linear(mlp_width[i], 1),  # opacity
-                    nn.Linear(mlp_width[i], 3),  # scale
-                    nn.Linear(mlp_width[i], 4),  # rotation
-                    nn.Linear(mlp_width[i], 3),  # features_dc
-                    nn.Linear(mlp_width[i], out_dim[i] - 11),  # features_rest
-                ])
-            )
-
+                                nn.Linear(mlp_width[i], out_dim[i])))
+            elif self.mlp_mode == "separate":
+                self.models.append(
+                    torch.nn.ModuleList([
+                        nn.Sequential(
+                            nn.Linear(feat_dim, mlp_width[i]),
+                            nn.ReLU(),
+                            nn.Linear(mlp_width[i], mlp_width[i]),
+                            nn.ReLU(),
+                            nn.Linear(mlp_width[i], attr_dim))
+                        for attr_dim in [1, 3, 4, 3, out_dim[i] - 11]
+                    ])
+                )
+            elif self.mlp_mode == "mixed":
+                self.models.append(nn.Sequential(
+                                    nn.Linear(feat_dim, mlp_width[i]),
+                                    nn.ReLU(),
+                                    nn.Linear(mlp_width[i], mlp_width[i]),
+                                    nn.ReLU(),
+                                    ))
+                self.output_layers.append(
+                    torch.nn.ModuleList([
+                        nn.Linear(mlp_width[i], 1),  # opacity
+                        nn.Linear(mlp_width[i], 3),  # scale
+                        nn.Linear(mlp_width[i], 4),  # rotation
+                        nn.Linear(mlp_width[i], 3),  # features_dc
+                        nn.Linear(mlp_width[i], out_dim[i] - 11),  # features_rest
+                    ])
+                )
+            else:
+                raise ValueError(f"Unknown mlp_mode {mlp_mode}")
 
     def forward(self, x, Q=0):
         # Pass the input through k0
@@ -125,18 +168,64 @@ class FeaturePlanes(nn.Module):
         level_features = []
 
         for i in range(self.activate_level + 1):
-            feat = self.k0s[i](x , Q)
-            level_features.append(feat)
+            if self.plane_mode in ["shared", "mixed"]:
+                feat = self.k0s[i](x , Q)
+                level_features.append(feat)
+            elif self.plane_mode == "separate":
+                feat = []
+                for j in range(self.num_attributes):
+                    feat.append(self.k0s[i][j](x , Q))
+                level_features.append(torch.cat(feat, dim=1))
+            else:
+                raise ValueError(f"Unknown plane_mode {plane_mode}")
 
         res = []
-        cnt =0
-        for m, out, feat in zip(self.models, self.output_layers, level_features):
-            rr = m(feat)  # [N,mlp_width]
-            rr = torch.cat([o(rr) for o in out], dim=1)
-            res.append(rr)
-            cnt = cnt + 1
-            if cnt > self.activate_level:
-                break
+        cnt = 0
+        if self.mlp_mode =="shared":
+            for m, feat in zip(self.models, level_features):
+                if self.plane_mode == "shared":
+                    rr = m(feat)  # [N,out_dim]
+                    res.append(rr)
+                    cnt = cnt + 1
+                    if cnt > self.activate_level:
+                        break
+                elif self.plane_mode in ["separate", "mixed"]:
+                    fs = feat.size(1) // self.num_attributes # feat size
+                    rr = torch.cat([m[j](feat[:, j*fs:(j+1)*fs]) for j in range(self.num_attributes)], dim=1)
+                    res.append(rr)
+                    cnt = cnt + 1
+                    if cnt > self.activate_level:
+                        break
+                else:
+                    raise ValueError(f"Unknown plane_mode {plane_mode}")
+        elif self.mlp_mode == "mixed":
+            for m, out, feat in zip(self.models, self.output_layers, level_features):
+                rr = m(feat)  # [N,mlp_width]
+                rr = torch.cat([o(rr) for o in out], dim=1)
+                res.append(rr)
+                cnt = cnt + 1
+                if cnt > self.activate_level:
+                    break
+        elif self.mlp_mode == "separate":
+            for m, feat in zip(self.models, level_features):
+                if self.plane_mode == "shared":
+                    rr = torch.cat([m[i](feat) for i in range(self.num_attributes)], dim=1)
+                    res.append(rr)
+                    cnt = cnt + 1
+                    if cnt > self.activate_level:
+                        break
+                elif self.plane_mode in ["separate", "mixed"]:
+                    fs = feat.size(1) // self.num_attributes # feat size
+                    # import pdb; pdb.set_trace()
+                    rr = torch.cat([m[i](feat[:, i*fs:(i+1)*fs]) for i in range(self.num_attributes)], dim=1)
+                    res.append(rr)
+                    cnt = cnt + 1
+                    if cnt > self.activate_level:
+                        break
+                else:
+                    raise ValueError(f"Unknown plane_mode {plane_mode}")
+        else:
+            raise ValueError(f"Unknown mlp_mode {mlp_mode}")
 
         return sum(res)
 
@@ -144,61 +233,60 @@ class FeaturePlanes(nn.Module):
 class GaussianLearner(nn.Module):
     def __init__(self, model_params, xyz_min = [-2, -2, -2], xyz_max=[2, 2, 2] ):
         super(GaussianLearner, self).__init__()
-
         self.Q0 = 0.03
         self.xyz_min = torch.tensor(xyz_min).cuda()
         self.xyz_max = torch.tensor(xyz_max).cuda()
-
         self.world_size = [model_params.plane_size]*3
         self.max_step = 6
         self.current_step = 0
         # output dims: opacity + scale + rotation + sh_coeffs
         out_dim = 1 + 3 + 4 + ((model_params.sh_degree + 1) ** 2) * 3
-
         self._feat = FeaturePlanes(world_size=self.world_size, xyz_min = self.xyz_min, xyz_max= self.xyz_max,
                                     feat_dim = model_params.num_channels, mlp_width = [model_params.mlp_dim],
-                                    out_dim=[out_dim], subplane_multiplier=model_params.subplane_multiplier)
-
+                                    out_dim=[out_dim], subplane_multiplier=model_params.subplane_multiplier,
+                                    plane_mode=model_params.plane_mode, mlp_mode=model_params.mlp_mode)
         self.register_buffer('opacity_scale', torch.tensor(10))
         self.opacity_scale = self.opacity_scale.cuda()
-
         self.entropy_gaussian = Entropy_gaussian(Q=1).cuda()
-
 
     def activate_plane_level(self):
         self._feat.activate_level +=1
         print('******* Plane Level to:', self._feat.activate_level)
 
-
     def inference(self, xyz):
         inputs = xyz.cuda().detach()
-
         tmp  = self._feat(inputs, self.Q0)  # [N,8+3*(sh_degree+1)**2]
         opacity = tmp[:,0:1]  # [N,1]
         scale = torch.sigmoid(tmp[:, 1:4])  # [N,3]
         rotations = tmp[:, 4:8]  # [N,4]
         features = tmp[:, 8:]  # [N,3*(sh_degree+1)**2]
-
         return opacity*10, scale, features, rotations
-
 
     def tv_loss(self, w):
         for level in range(self._feat.activate_level+1):
             factor = 1.0
-            self._feat.k0s[level].total_variation_add_grad(w*((0.5)**(2-level)))
-
+            if self._feat.plane_mode in ["shared", "mixed"]:
+                self._feat.k0s[level].total_variation_add_grad(w*((0.5)**(2-level)))
+            elif self._feat.plane_mode == "separate":
+                for attr in range(self._feat.num_attributes):
+                    self._feat.k0s[level][attr].total_variation_add_grad(w*((0.5)**(2-level)))
 
     def calc_sparsity(self):
-
         plane = self._feat
         res = 0
         for level in range(self._feat.activate_level+1):
-
             factor = 1.0
-
-            for data in [plane.k0s[level].xy_plane, plane.k0s[level].xz_plane, plane.k0s[level].yz_plane]:
-                l1norm = torch.mean(torch.abs(data))
-                res += l1norm * ((0.4)**(2-level)) * factor
+            if self._feat.plane_mode in ["shared", "mixed"]:
+                for data in [plane.k0s[level].xy_plane, plane.k0s[level].xz_plane, plane.k0s[level].yz_plane]:
+                    l1norm = torch.mean(torch.abs(data))
+                    res += l1norm * ((0.4)**(2-level)) * factor
+            elif self._feat.plane_mode == "separate":
+                for attr in range(self._feat.num_attributes):
+                    for data in [plane.k0s[level][attr].xy_plane, plane.k0s[level][attr].xz_plane, plane.k0s[level][attr].yz_plane]:
+                        l1norm = torch.mean(torch.abs(data))
+                        res += l1norm * ((0.4)**(2-level)) * factor
+            else:
+                raise ValueError(f"Unknown plane_mode {plane_mode}")
 
         return res / ((self._feat.activate_level+1)*3)
 
@@ -473,41 +561,52 @@ class GaussianModel:
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
         ]
 
+        net_lr_scales = [
+            training_args.net_opacity_lr_scale,
+            training_args.net_scaling_lr_scale,
+            training_args.net_rotation_lr_scale,
+            training_args.net_feature_dc_lr_scale,
+            training_args.net_feature_rest_lr_scale,
+        ]
+
         for i in range(3):
             if i == self.feat_planes._feat.activate_level:
-                l.append( {'params': self.feat_planes._feat.k0s[i].parameters(), 'lr': training_args.feat_plane_active_k0_lr, 'name': 'feat_planes%d'%i})
-                l.append( {'params': self.feat_planes._feat.models[i].parameters(), 'lr': training_args.feat_plane_active_mlp_lr, 'name': 'fp_mlp_f%d'%i})
-                if training_args.use_attribute_level_lr:
-                    l.append( {'params': self.feat_planes._feat.output_layers[i][0].parameters(), 'lr': training_args.feat_plane_active_mlp_lr, 'name': 'fp_mlp_f%d'%i}) # opacity
-                    l.append( {'params': self.feat_planes._feat.output_layers[i][1].parameters(), 'lr': training_args.feat_plane_active_mlp_lr/10, 'name': 'fp_mlp_f%d'%i}) # scaling
-                    l.append( {'params': self.feat_planes._feat.output_layers[i][2].parameters(), 'lr': training_args.feat_plane_active_mlp_lr/50, 'name': 'fp_mlp_f%d'%i}) # rotation
-                    l.append( {'params': self.feat_planes._feat.output_layers[i][3].parameters(), 'lr': training_args.feat_plane_active_mlp_lr/20, 'name': 'fp_mlp_f%d'%i}) # features_dc
-                    l.append( {'params': self.feat_planes._feat.output_layers[i][4].parameters(), 'lr': training_args.feat_plane_active_mlp_lr/400, 'name': 'fp_mlp_f%d'%i}) # features_rest
+                feat_lr = training_args.feat_plane_active_k0_lr
+                mlp_lr = training_args.feat_plane_active_mlp_lr
             else:
-                l.append( {'params': self.feat_planes._feat.k0s[i].parameters(), 'lr': training_args.feat_plane_k0_lr, 'name': 'feat_planes%d'%i})
-                l.append( {'params': self.feat_planes._feat.models[i].parameters(), 'lr': training_args.feat_plane_mlp_lr, 'name': 'fp_mlp_f%d'%i})
-                if training_args.use_attribute_level_lr:
-                    l.append( {'params': self.feat_planes._feat.output_layers[i][0].parameters(), 'lr': training_args.feat_plane_mlp_lr, 'name': 'fp_mlp_f%d'%i}) # opacity
-                    l.append( {'params': self.feat_planes._feat.output_layers[i][1].parameters(), 'lr': training_args.feat_plane_mlp_lr/10, 'name': 'fp_mlp_f%d'%i}) # scaling
-                    l.append( {'params': self.feat_planes._feat.output_layers[i][2].parameters(), 'lr': training_args.feat_plane_mlp_lr/50, 'name': 'fp_mlp_f%d'%i}) # rotation
-                    l.append( {'params': self.feat_planes._feat.output_layers[i][3].parameters(), 'lr': training_args.feat_plane_mlp_lr/20, 'name': 'fp_mlp_f%d'%i}) # features_dc
-                    l.append( {'params': self.feat_planes._feat.output_layers[i][4].parameters(), 'lr': training_args.feat_plane_mlp_lr/400, 'name': 'fp_mlp_f%d'%i}) # features_rest
+                feat_lr = training_args.feat_plane_k0_lr
+                mlp_lr = training_args.feat_plane_mlp_lr
 
-        # import pdb; pdb.set_trace()
+            # add feature plane params to optimize
+            if self.feat_planes._feat.plane_mode in ["shared", "mixed"]:
+                l.append({'params': self.feat_planes._feat.k0s[i].parameters(), 'lr': feat_lr, 'name': f'feat_planes{i}'})
+            elif self.feat_planes._feat.plane_mode == "separate":
+                for j, s in zip(range(5), net_lr_scales):
+                    l.append({'params': self.feat_planes._feat.k0s[i][j].parameters(), 'lr': feat_lr * s, 'name': f'feat_planes{i}_{j}'})
+
+            # add mlp params to optimze
+            if self.feat_planes._feat.mlp_mode in ["shared", "mixed"]:
+                l.append({'params': self.feat_planes._feat.models[i].parameters(), 'lr': mlp_lr, 'name': f'fp_mlp_f{i}'})
+            elif self.feat_planes._feat.mlp_mode == "separate":
+                for j, s in zip(range(5), net_lr_scales):
+                    l.append({'params': self.feat_planes._feat.models[i][j].parameters(), 'lr': mlp_lr * s, 'name': f'fp_mlp_f{i},{j}'})
+            if self.feat_planes._feat.mlp_mode == "mixed":
+                for j, s in zip(range(5), net_lr_scales):
+                    l.append({'params': self.feat_planes._feat.output_layers[i][j].parameters(), 'lr': mlp_lr * s, 'name': f'fp_mlp_out{i},{j}'})
 
         self.optimizer = torch.optim.Adam(l, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
                                                     lr_final=training_args.position_lr_final*self.spatial_lr_scale,
                                                     lr_delay_mult=training_args.position_lr_delay_mult,
                                                     max_steps=training_args.position_lr_max_steps)
-        self.planes_scheduler_args = get_expon_lr_func(lr_init=training_args.feat_plane_active_k0_lr,
-                                                    lr_final=training_args.feat_plane_active_k0_lr / 2,
-                                                    lr_delay_mult=training_args.position_lr_delay_mult,
-                                                    max_steps=training_args.position_lr_max_steps)
-        self.planesmlp_scheduler_args = get_expon_lr_func(lr_init=training_args.feat_plane_active_mlp_lr,
-                                                    lr_final=training_args.feat_plane_active_mlp_lr/2,
-                                                    lr_delay_mult=training_args.position_lr_delay_mult,
-                                                    max_steps=training_args.position_lr_max_steps)
+        # self.planes_scheduler_args = get_expon_lr_func(lr_init=training_args.feat_plane_active_k0_lr,
+        #                                             lr_final=training_args.feat_plane_active_k0_lr / 2,
+        #                                             lr_delay_mult=training_args.position_lr_delay_mult,
+        #                                             max_steps=training_args.position_lr_max_steps)
+        # self.planesmlp_scheduler_args = get_expon_lr_func(lr_init=training_args.feat_plane_active_mlp_lr,
+        #                                             lr_final=training_args.feat_plane_active_mlp_lr/2,
+        #                                             lr_delay_mult=training_args.position_lr_delay_mult,
+        #                                             max_steps=training_args.position_lr_max_steps)
 
     def update_learning_rate(self, iteration):
         ''' Learning rate scheduling per step '''
@@ -515,13 +614,13 @@ class GaussianModel:
             if param_group["name"] == "xyz":
                 lr = self.xyz_scheduler_args(iteration)
                 param_group['lr'] = lr
-            if self.use_planes_lr_schedulers:
-                if param_group["name"].startswith("feat_planes"):
-                    lr = self.planes_scheduler_args(iteration)
-                    param_group['lr'] = lr
-                elif param_group["name"].startswith("fp_mlp_f"):
-                    lr = self.planesmlp_scheduler_args(iteration)
-                    param_group['lr'] = lr
+            # if self.use_planes_lr_schedulers:
+            #     if param_group["name"].startswith("feat_planes"):
+            #         lr = self.planes_scheduler_args(iteration)
+            #         param_group['lr'] = lr
+            #     elif param_group["name"].startswith("fp_mlp_f"):
+            #         lr = self.planesmlp_scheduler_args(iteration)
+            #         param_group['lr'] = lr
 
     def construct_list_of_attributes(self):
         l = ['x', 'y', 'z', 'nx', 'ny', 'nz']

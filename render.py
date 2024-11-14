@@ -36,11 +36,6 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, decompress:bool):
     # enable all net features for inference
-    # dataset.disable_net_opacity = False
-    # dataset.disable_net_rotation = False
-    # dataset.disable_net_scale = False
-    # dataset.disable_net_features_rest = False
-    # dataset.disable_net_features_dc = False
 
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree, model_params=dataset)

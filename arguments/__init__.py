@@ -56,6 +56,8 @@ class ModelParams(ParamGroup):
         self.plane_size = 2500
         self.subplane_multiplier = 1
         self.mlp_dim = 168
+        self.plane_mode = "shared"  # shared, separate, mixed
+        self.mlp_mode = "shared"  # shared, separate, mixed
         self.bbox_scale = 0.8
         self.data_device = "cuda"
         self.eval = False
@@ -92,12 +94,16 @@ class OptimizationParams(ParamGroup):
         self.opacity_lr = 0.05
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
+        self.net_feature_dc_lr_scale = 1
+        self.net_feature_rest_lr_scale = 1
+        self.net_opacity_lr_scale = 1
+        self.net_scaling_lr_scale = 1
+        self.net_rotation_lr_scale = 1
         self.feat_plane_active_k0_lr = 0.01
         self.feat_plane_active_mlp_lr = 1e-4
         self.feat_plane_k0_lr = 0.001
         self.feat_plane_mlp_lr = 1e-5
         self.use_planes_lr_schedulers = False
-        self.use_attribute_level_lr = False
         self.percent_dense = 0.01
         self.lambda_dssim = 0.2
         self.lambda_sparsity = 1e-3
