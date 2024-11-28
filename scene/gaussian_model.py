@@ -33,7 +33,6 @@ from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 from .grids import PlaneGrid
-from torch.utils.data import TensorDataset, DataLoader
 import torch.nn.functional as F
 import numpy as np
 import pdb
@@ -75,9 +74,101 @@ class Conctractor(nn.Module):
             indnorm[signs] *=-1
         return indnorm
 
+
+class MultiTaskAttention(nn.Module):
+    def __init__(self, embed_dim, num_heads, num_tasks=2):
+        super(MultiTaskAttention, self).__init__()
+        self.shared_attention = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=True)
+        self.task_heads = nn.ModuleList([nn.Linear(embed_dim, embed_dim) for _ in range(num_tasks)])
+        self.task_outputs = nn.ModuleList([nn.Linear(embed_dim, 1) for _ in range(num_tasks)])
+
+    def forward(self, x):
+        # Shared attention
+        shared_features, _ = self.shared_attention(x, x, x)
+
+        task_predictions = []
+        for task_head, task_output in zip(self.task_heads, self.task_outputs):
+            # Task-specific transformations
+            task_features = task_head(shared_features)
+            task_prediction = task_output(task_features.mean(dim=1))  # Aggregate features
+            task_predictions.append(task_prediction)
+
+        return task_predictions
+
+
+class MultiTaskFeatureAttention(nn.Module):
+    def __init__(self, embed_dim, num_heads, num_tasks=2):
+        super(MultiTaskFeatureAttention, self).__init__()
+        self.shared_attention = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=True)
+        # Task-specific projection layers to transform shared features
+        self.task_heads = nn.ModuleList([nn.Linear(embed_dim, embed_dim) for _ in range(num_tasks)])
+
+    def forward(self, x):
+        # Shared attention across all tasks
+        shared_features, _ = self.shared_attention(x, x, x)  # [batch_size, seq_len, embed_dim]
+
+        # Task-specific feature embeddings
+        task_embeddings = []
+        for task_head in self.task_heads:
+            task_features = task_head(shared_features)  # [batch_size, seq_len, embed_dim]
+            task_embeddings.append(task_features)
+
+        return task_embeddings
+
+
+class TaskCorrelationAttention(nn.Module):
+    def __init__(self, embed_dim, num_tasks, num_heads):
+        super(TaskCorrelationAttention, self).__init__()
+        self.num_tasks = num_tasks
+        self.embed_dim = embed_dim
+
+        # Shared attention mechanism for task correlation
+        self.task_attention = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, batch_first=True)
+
+        # Task-specific projection layers
+        self.task_projections = nn.ModuleList([
+            nn.Linear(embed_dim, embed_dim) for _ in range(num_tasks)
+        ])
+
+        # Task-specific output layers (optional)
+        self.task_outputs = nn.ModuleList([
+            nn.Linear(embed_dim, embed_dim) for _ in range(num_tasks)
+        ])
+
+    def forward(self, task_embeddings):
+        """
+        task_embeddings: List of task-specific input embeddings [Tensors of shape (batch_size, seq_len, embed_dim)]
+        """
+        # Stack task embeddings into a single tensor
+        # stacked_tasks = torch.stack(task_embeddings, dim=1)  # Shape: (batch_size, num_tasks, seq_len, embed_dim)
+        # batch_size, num_tasks, seq_len, embed_dim = stacked_tasks.shape
+        # Flatten to feed into multi-head attention
+        # flat_tasks = stacked_tasks.view(batch_size * num_tasks, seq_len, embed_dim)
+
+        batch_size, num_tasks, seq_len, embed_dim = task_embeddings.shape
+        flat_tasks = task_embeddings.view(batch_size * num_tasks, seq_len, embed_dim)
+
+        # Apply task attention (tasks attend to each other)
+        correlated_features, _ = self.task_attention(flat_tasks, flat_tasks, flat_tasks)
+
+        # Reshape back to (batch_size, num_tasks, seq_len, embed_dim)
+        correlated_features = correlated_features.view(batch_size, num_tasks, seq_len, embed_dim)
+
+        return correlated_features
+        # # Task-specific transformations
+        task_outputs = []
+        for task_idx in range(self.num_tasks):
+            task_specific = self.task_projections[task_idx](correlated_features[:, task_idx, :, :])  # Task-specific layer
+            task_output = self.task_outputs[task_idx](task_specific)  # Optional task-specific output
+            task_outputs.append(task_output)
+
+        return task_outputs  # List of task-specific embeddings [Tensor of shape (batch_size, seq_len, embed_dim)]
+
+
+
 class FeaturePlanes(nn.Module):
     def __init__(self, world_size, xyz_min, xyz_max, feat_dim = 24, mlp_width = [168], out_dim=[53], subplane_multiplier=1,
-                 mlp_mode="shared", plane_mode="shared"):
+                 mlp_mode="shared", plane_mode="shared", enable_attention=False):
         super(FeaturePlanes, self).__init__()
 
         self.world_size, self.xyz_min, self.xyz_max = world_size, xyz_min, xyz_max
@@ -88,6 +179,9 @@ class FeaturePlanes(nn.Module):
         self.level_factor = 0.5
         self.plane_mode = plane_mode
         self.mlp_mode = mlp_mode
+        self.enable_attention = enable_attention
+        self.attention_embed_dim = feat_dim # * self.num_attributes
+        self.attention_num_heads = self.num_attributes
 
         t_ws = torch.tensor(world_size)
 
@@ -109,10 +203,11 @@ class FeaturePlanes(nn.Module):
             print('Create Planes @ ', cur_ws)
 
         self.models = torch.nn.ModuleList()
+        self.mtas = torch.nn.ModuleList()
         self.output_layers = torch.nn.ModuleList()
 
-        mlp_width = [mlp_width[0],mlp_width[0],mlp_width[0]]
-        out_dim = [out_dim[0],out_dim[0],out_dim[0]]
+        mlp_width = [mlp_width[0], mlp_width[0], mlp_width[0]]
+        out_dim = [out_dim[0], out_dim[0], out_dim[0]]
 
         for i in range(self.num_levels):
             if self.plane_mode == "shared":
@@ -132,6 +227,14 @@ class FeaturePlanes(nn.Module):
                                 nn.ReLU(),
                                 nn.Linear(mlp_width[i], out_dim[i])))
             elif self.mlp_mode == "separate":
+                if self.enable_attention:
+                    self.mtas.append(TaskCorrelationAttention(
+                       embed_dim=self.attention_embed_dim,
+                       num_heads=self.attention_num_heads,
+                       num_tasks=self.num_attributes)
+                    )
+                    print('Creating attention module')
+
                 self.models.append(
                     torch.nn.ModuleList([
                         nn.Sequential(
@@ -208,17 +311,26 @@ class FeaturePlanes(nn.Module):
                 if cnt > self.activate_level:
                     break
         elif self.mlp_mode == "separate":
-            for m, feat in zip(self.models, level_features):
+            for i, (m, feat) in enumerate(zip(self.models, level_features)):
                 if self.plane_mode == "shared":
-                    rr = torch.cat([m[i](feat) for i in range(self.num_attributes)], dim=1)
+                    # if self.enable_attention:
+                    #     feat = self.mtas[i](feat.reshape(-1, 1, feat.shape[1])).squeeze()
+                    #     fs = feat.shape[1] // self.num_attributes
+                    #     rr = torch.cat([m[j](feat[:, j*fs:(j+1)*fs]) for j in range(self.num_attributes)], dim=1)
+                    # else:
+                    rr = torch.cat([m[j](feat) for j in range(self.num_attributes)], dim=1)
                     res.append(rr)
                     cnt = cnt + 1
                     if cnt > self.activate_level:
                         break
                 elif self.plane_mode in ["separate", "mixed"]:
-                    fs = feat.size(1) // self.num_attributes # feat size
-                    # import pdb; pdb.set_trace()
-                    rr = torch.cat([m[i](feat[:, i*fs:(i+1)*fs]) for i in range(self.num_attributes)], dim=1)
+                    if self.enable_attention:
+                        fs = feat.shape[1] // self.num_attributes
+                        feats = self.mtas[i](feat.reshape(-1, self.num_attributes, 1, fs)).squeeze()
+                        rr = torch.cat([m[j](feats[:, j]) for j in range(self.num_attributes)], dim=1)
+                    else:
+                        fs = feat.size(1) // self.num_attributes # feat size
+                        rr = torch.cat([m[j](feat[:, j*fs:(j+1)*fs]) for j in range(self.num_attributes)], dim=1)
                     res.append(rr)
                     cnt = cnt + 1
                     if cnt > self.activate_level:
@@ -240,18 +352,20 @@ class GaussianLearner(nn.Module):
         self.world_size = [model_params.plane_size]*3
         self.max_step = 6
         self.current_step = 0
+        self.sh_degree = 0
         # output dims: opacity + scale + rotation + sh_coeffs
         out_dim = 1 + 3 + 4 + ((model_params.sh_degree + 1) ** 2) * 3
-        self._feat = FeaturePlanes(world_size=self.world_size, xyz_min = self.xyz_min, xyz_max= self.xyz_max,
-                                    feat_dim = model_params.num_channels, mlp_width = [model_params.mlp_dim],
+        self._feat = FeaturePlanes(world_size=self.world_size, xyz_min=self.xyz_min, xyz_max=self.xyz_max,
+                                    feat_dim=model_params.num_channels, mlp_width=[model_params.mlp_dim],
                                     out_dim=[out_dim], subplane_multiplier=model_params.subplane_multiplier,
-                                    plane_mode=model_params.plane_mode, mlp_mode=model_params.mlp_mode)
+                                    plane_mode=model_params.plane_mode, mlp_mode=model_params.mlp_mode,
+                                    enable_attention=model_params.enable_attention)
         self.register_buffer('opacity_scale', torch.tensor(10))
         self.opacity_scale = self.opacity_scale.cuda()
         self.entropy_gaussian = Entropy_gaussian(Q=1).cuda()
 
     def activate_plane_level(self):
-        self._feat.activate_level +=1
+        self._feat.activate_level += 1
         print('******* Plane Level to:', self._feat.activate_level)
 
     def inference(self, xyz):
@@ -323,12 +437,12 @@ class GaussianModel:
         self._xyz = torch.empty(0)
 
         self._features_dc = torch.empty(0)
+        self._features_rest = torch.empty(0)
         self._scaling = torch.empty(0)
+        self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
 
         self.feat_planes = GaussianLearner(model_params).cuda()
-
-        self.deform = False
 
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
@@ -483,7 +597,6 @@ class GaussianModel:
         self.setup_contractor(center.cpu().tolist(),length.cpu().tolist(), False)
         print('scene_center:',center.cpu().tolist(),'scene_length',length.cpu().tolist())
 
-
     def inference_gaussians(self, visible = None):
         points = self.get_xyz
 
@@ -495,7 +608,7 @@ class GaussianModel:
         scales = (scales-1)*5-2
         features = features.view(features.size(0),(self.max_sh_degree + 1) ** 2,3)
         feature_dc = features[:,0:1,:]  # [N,1,3]
-        feature_rest = features[:,1:,:]  # [N,8,3] for max_sh_degree=2
+        feature_rest = features[:,1:,:]  # [N,15,3] for max_sh_degree=3
 
         self._opacity_net = self.build_properties(opacity,visible)
         self._scaling_net = self.build_properties(scales,visible)

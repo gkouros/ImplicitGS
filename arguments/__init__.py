@@ -58,6 +58,7 @@ class ModelParams(ParamGroup):
         self.mlp_dim = 168
         self.plane_mode = "shared"  # shared, separate, mixed
         self.mlp_mode = "shared"  # shared, separate, mixed
+        self.enable_attention = False
         self.bbox_scale = 0.8
         self.data_device = "cuda"
         self.eval = False
