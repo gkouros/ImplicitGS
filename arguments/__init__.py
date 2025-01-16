@@ -51,7 +51,7 @@ class ModelParams(ParamGroup):
         self._model_path = ""
         self._images = "images"
         self._resolution = -1
-        self._white_background = True
+        self._white_background = False
         self.num_channels = 9
         self.plane_size = 2500
         self.subplane_multiplier = 1
@@ -120,6 +120,7 @@ class OptimizationParams(ParamGroup):
         self.pc_downsamplerate = 0.65 # 0.4
         self.quantization = 1
         self.graph_downsampling_iters = [11000]
+        self.plane_level_activation_iters = [20_000, 35_000]
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):
