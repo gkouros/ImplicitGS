@@ -153,8 +153,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if  gaussians.enable_net and iteration %4 ==0 and not args.no_regularization:
             gaussians.feat_planes.tv_loss(opt.tv_weight_a)
 
-
-
         iter_end.record()
 
         with torch.no_grad():
@@ -198,8 +196,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     gaussians.update_contractor()
                 gaussians.enable_net = True
 
-
-            if iteration in [20000, 35000] and not args.no_multilevel:
+            if iteration in opt.plane_level_activation_iters and not args.no_mbultilevel:
                 gaussians.activate_plane_level()
 
             # Optimizer step
@@ -208,7 +205,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.optimizer.zero_grad(set_to_none = True)
 
             if (iteration in checkpoint_iterations):
-                print('number of points:', gaussians._xyz.size(0),gaussians.capture()[1].size(0) )
+                print('number of points:', gaussians._xyz.size(0), gaussians.capture()[1].size(0))
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save(gaussians.capture(), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 

@@ -18,8 +18,6 @@
 #
 
 
-
-
 import random
 import torch
 import numpy as np
@@ -39,7 +37,6 @@ import pdb
 import time
 
 from utils.entropy_models import  Entropy_gaussian
-
 
 
 class Conctractor(nn.Module):
@@ -699,7 +696,7 @@ class GaussianModel:
                 for j, s in zip(range(5), net_lr_scales):
                     l.append({'params': self.feat_planes._feat.k0s[i][j].parameters(), 'lr': feat_lr * s, 'name': f'feat_planes{i}_{j}'})
 
-            # add mlp params to optimze
+            # add mlp params to optimize
             if self.feat_planes._feat.mlp_mode in ["shared", "mixed"]:
                 l.append({'params': self.feat_planes._feat.models[i].parameters(), 'lr': mlp_lr, 'name': f'fp_mlp_f{i}'})
             elif self.feat_planes._feat.mlp_mode == "separate":
@@ -811,7 +808,6 @@ class GaussianModel:
         rots = np.zeros((xyz.shape[0], len(rot_names)))
         for idx, attr_name in enumerate(rot_names):
             rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
-
 
         self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
         self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
@@ -966,8 +962,6 @@ class GaussianModel:
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation)
 
     def clone_and_grow(self):
-
-
         new_xyz = self._xyz + torch.randn(self._xyz.size(), device = self._xyz.device)*0.1
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]
@@ -1013,12 +1007,9 @@ class GaussianModel:
         torch.cuda.empty_cache()
         print("Graph Downsampling Processed, points number after sampling: ", self.get_xyz.shape[0], "Time: ", time.time() - t1, "seconds")
 
-
-
     def prune_points_m(self, min_opacity):
         prune_mask = (self.get_opacity < min_opacity).squeeze()
         self.prune_points(prune_mask)
-
         torch.cuda.empty_cache()
 
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
